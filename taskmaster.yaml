@@ -1,0 +1,70 @@
+programs:
+  simple-web:
+    cmd: "ping localhost -n 10"
+    numprocs: 1
+    umask: 022
+    workingdir: ./
+    autostart: true
+    autorestart: unexpected
+    exitcodes:
+      - 0
+      - 2
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: ./logs/webapp.stdout
+    stderr: ./logs/webapp.stderr
+    env:
+      ASPNETCORE_ENVIRONMENT: Development
+      PORT: 5000
+
+  worker:
+    cmd: "ping 127.0.0.1 -n 15"
+    numprocs: 2
+    umask: 077
+    workingdir: ./
+    autostart: true
+    autorestart: always
+    exitcodes: 0
+    startretries: 5
+    starttime: 10
+    stopsignal: TERM
+    stoptime: 30
+    stdout: ./logs/worker.stdout
+    stderr: ./logs/worker.stderr
+    env:
+      WORKER_MODE: production
+      MAX_THREADS: 4
+      
+  ping:
+    cmd: "ping localhost -n 5"
+    numprocs: 1
+    autostart: true
+    autorestart: never
+    stdout: ./logs/ping.stdout
+
+  sleep:
+    cmd: "sleep 60"
+    numprocs: 1
+    autostart: false
+    autorestart: never
+    stdout: ./logs/sleep.stdout
+    stderr: ./logs/sleep.stderr
+
+  tail:
+    cmd: "powershell -command Get-Content -Path C:\\Windows\\Logs\\CBS\\CBS.log -Wait"
+    numprocs: 1
+    autostart: true
+    autorestart: always
+    stopsignal: INT
+    stdout: ./logs/tail.stdout
+    stderr: ./logs/tail.stderr
+
+  ls:
+    cmd: "cmd /c dir"
+    numprocs: 1
+    autostart: true
+    autorestart: never
+    stdout: ./logs/ls.stdout
+    stderr: ./logs/ls.stderr
