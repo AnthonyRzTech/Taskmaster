@@ -418,6 +418,8 @@ namespace Taskmaster
                 }
                 else if (req.HttpMethod == "POST")
                 {
+                    // Set ContentLength64 to 0 for empty responses to avoid HTTP 411 errors
+                    resp.ContentLength64 = 0;
                     string result = "";
                     if (path.StartsWith("/api/programs/"))
                     {
@@ -440,8 +442,13 @@ namespace Taskmaster
                         result = "shutting down";
                         Stop();
                     }
-                    var buf = Encoding.UTF8.GetBytes(result);
-                    await resp.OutputStream.WriteAsync(buf, 0, buf.Length);
+                    
+                    if (!string.IsNullOrEmpty(result))
+                    {
+                        var buf = Encoding.UTF8.GetBytes(result);
+                        resp.ContentLength64 = buf.Length;
+                        await resp.OutputStream.WriteAsync(buf, 0, buf.Length);
+                    }
                 }
                 else
                 {

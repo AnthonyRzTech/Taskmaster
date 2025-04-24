@@ -179,7 +179,7 @@ dotnet run -- -d
    curl http://localhost:8080/api/status
 
    # Restart a program
-   curl -X POST http://localhost:8080/api/programs/webapp/restart
+   curl -X POST --data "" http://localhost:8080/api/programs/simple-web/restart
    ```
 
 6. **Reload Configuration Without Downtime**  
