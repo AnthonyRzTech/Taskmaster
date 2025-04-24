@@ -41,12 +41,22 @@ namespace Taskmaster.Utils
         /// <summary>
         /// Renders a full dashboard showing all process information
         /// </summary>
-        public static void RenderDashboard(List<ProcessStatusInfo> statuses, Dictionary<string, ProgramConfig> configs)
+        public static void RenderDashboard(List<ProcessStatusInfo> statuses, Dictionary<string, ProgramConfig> configs, bool fullRedraw = false)
         {
             if (statuses == null || configs == null)
                 return;
 
-            Console.Clear();
+            // Only clear the screen on first draw or when explicitly requested
+            if (fullRedraw)
+            {
+                Console.Clear();
+            }
+            else
+            {
+                // Reset cursor to top-left corner and clear from cursor to end of screen
+                Console.SetCursorPosition(0, 0);
+                Console.Write("\u001b[J"); // ANSI escape code to clear from cursor to end of screen
+            }
             
             // Draw header
             DrawHeader();

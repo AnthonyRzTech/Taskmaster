@@ -6,6 +6,9 @@ namespace Taskmaster
 {
     class Program
     {
+        // Add a flag to track shutdown status
+        private static bool _isShuttingDown = false;
+        
         static void Main(string[] args)
         {
             string configFile = "taskmaster.yaml";
@@ -68,14 +71,31 @@ namespace Taskmaster
             // Create and start the daemon
             var daemon = new TaskmasterDaemon(configFile);
             
-            // Set up signal handling for SIGHUP (for non-Windows platforms)
-            // Windows handling is done in the TaskmasterDaemon class
+            // Set up signal handling for Ctrl+C with shutdown protection
             Console.CancelKeyPress += (sender, e) => {
                 if (e.SpecialKey == ConsoleSpecialKey.ControlC)
                 {
-                    Console.WriteLine("Shutting down Taskmaster...");
-                    daemon.Stop();
-                    e.Cancel = true;
+                    // Only process the first Ctrl+C event
+                    if (!_isShuttingDown)
+                    {
+                        _isShuttingDown = true;
+                        Console.WriteLine("Shutting down Taskmaster...");
+                        
+                        // Force immediate exit after shutdown completes
+                        e.Cancel = true;
+                        
+                        // Stop the daemon on a separate thread to avoid deadlocks
+                        ThreadPool.QueueUserWorkItem(_ => {
+                            daemon.Stop();
+                            // Force exit if needed
+                            Environment.Exit(0);
+                        });
+                    }
+                    else
+                    {
+                        // Always cancel the event to prevent default handling
+                        e.Cancel = true;
+                    }
                 }
             };
             

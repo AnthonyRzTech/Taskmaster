@@ -19,7 +19,7 @@ namespace Taskmaster
         private ConfigurationManager? ConfigManager { get; set; }
         private ProcessManager? ProcessManager { get; set; }
         private CancellationTokenSource? CancellationTokenSource { get; set; }
-        private bool IsRunning { get; set; } = false;
+        public bool IsRunning { get; private set; } = false;
         
         // For handling signals on Unix platforms
         private bool SignalHandlersRegistered { get; set; } = false;
@@ -462,6 +462,11 @@ namespace Taskmaster
             {
                 Thread.Sleep(1000);
             }
+        }
+
+        public string GetLogFilePath()
+        {
+            return Logger.GetLogFilePath();
         }
     }
 }

@@ -16,6 +16,9 @@ namespace Taskmaster
         private bool IsInDashboardMode { get; set; } = false;
         private CancellationTokenSource? DashboardCts { get; set; }
         
+        // Add a timer to check if daemon is still running
+        private Timer? StatusCheckTimer { get; set; }
+
         // Define available commands
         private readonly Dictionary<string, (string Description, Action<string[]> Handler)> Commands = 
             new Dictionary<string, (string, Action<string[]>)>();
@@ -24,31 +27,44 @@ namespace Taskmaster
         {
             Daemon = daemon;
             
-            // Register commands with descriptions
-            Commands["help"] = ("Show this help message", ShowHelp);
-            Commands["status"] = ("Show status of all programs or a specific program", ShowStatus);
-            Commands["dashboard"] = ("Show an interactive dashboard of all processes", ShowDashboard);
-            Commands["start"] = ("Start a program or all programs", StartProgram);
-            Commands["stop"] = ("Stop a program or all programs", StopProgram);
-            Commands["restart"] = ("Restart a program or all programs", RestartProgram);
-            Commands["reload"] = ("Reload the configuration file", ReloadConfig);
-            Commands["config"] = ("Show configuration for a program", ShowConfig);
-            Commands["signal"] = ("Send a signal to a process", SendSignal);
-            Commands["shutdown"] = ("Shutdown the taskmaster daemon", Shutdown);
-            Commands["version"] = ("Show taskmaster version", ShowVersion);
-            Commands["exit"] = ("Exit the shell (daemon continues running)", Exit);
-            Commands["quit"] = ("Exit the shell (daemon continues running)", Exit);
+            // Define commands
+            Commands["help"] = ("Shows available commands", ShowHelp);
+            Commands["status"] = ("Shows status of all programs", ShowStatus);
+            Commands["start"] = ("Starts a program", StartProgram);
+            Commands["stop"] = ("Stops a program", StopProgram);
+            Commands["restart"] = ("Restarts a program", RestartProgram);
+            Commands["reload"] = ("Reloads the configuration", ReloadConfig);
+            Commands["config"] = ("Shows program configuration", ShowConfig);
+            Commands["signal"] = ("Sends signal to a program", SendSignal);
+            Commands["shutdown"] = ("Shuts down the taskmaster daemon", Shutdown);
+            Commands["exit"] = ("Exits the shell", Exit);
+            Commands["quit"] = ("Exits the shell", Exit);
+            Commands["version"] = ("Shows version information", ShowVersion);
+            Commands["dashboard"] = ("Shows interactive dashboard", ShowDashboard);
+            Commands["logs"] = ("Shows recent logs", ShowLogs); // Add new command
+            Commands["loglevel"] = ("Sets log level (error|warning|info|debug)", SetLogLevel); // Add a new command
         }
         
         public void Run()
         {
             Console.WriteLine("Taskmaster shell started. Type 'help' for available commands.");
+            Console.WriteLine("Tip: Use 'dashboard' for a clean interactive view of your processes.");
+            
+            // Start a timer to periodically check if the daemon is still running
+            // This allows us to detect if someone has triggered shutdown via Ctrl+C or other means
+            StatusCheckTimer = new Timer(_ => CheckDaemonStatus(), null, 1000, 1000);
             
             while (Running)
             {
                 Console.Write("taskmaster> ");
                 string? input = ReadLineWithHistory();
                 string commandInput = input?.Trim() ?? string.Empty;
+                
+                // Check if we should exit (could have been set by CheckDaemonStatus)
+                if (!Running)
+                {
+                    break;
+                }
                 
                 if (string.IsNullOrEmpty(commandInput))
                     continue;
@@ -78,6 +94,31 @@ namespace Taskmaster
                 else
                 {
                     Console.WriteLine($"Unknown command: {command}. Type 'help' for available commands.");
+                }
+            }
+            
+            // Clean up timer
+            StatusCheckTimer?.Dispose();
+        }
+        
+        // Check if the daemon is still running, and exit the shell if it's not
+        private void CheckDaemonStatus()
+        {
+            if (Daemon == null || !Daemon.IsRunning)
+            {
+                // The daemon has been stopped externally (e.g., by Ctrl+C)
+                Running = false;
+                
+                // If we're in ReadLineWithHistory, we need to force input to be available
+                // This is a bit of a hack, but it works to break out of the input loop
+                try
+                {
+                    Console.CursorLeft = 0;
+                    Console.WriteLine("\nTaskmaster daemon has been shut down. Press Enter to exit.");
+                }
+                catch
+                {
+                    // Ignore errors that might occur during shutdown
                 }
             }
         }
@@ -320,14 +361,20 @@ namespace Taskmaster
         
         private void RunDashboardLoop(CancellationToken token)
         {
+            bool firstRun = true;
+            
             while (!token.IsCancellationRequested)
             {
                 // Get process status data
                 var statusList = Daemon.GetAllProcessStatus();
                 var configs = Daemon.GetAllProgramConfigs();
                 
-                // Render the dashboard
-                ConsoleVisualizer.RenderDashboard(statusList, configs);
+                // Render the dashboard, only doing full redraw on first run
+                ConsoleVisualizer.RenderDashboard(statusList, configs, firstRun);
+                
+                // After first run, set flag to false
+                if (firstRun)
+                    firstRun = false;
                 
                 // Check for key press (non-blocking)
                 if (Console.KeyAvailable)
@@ -670,6 +717,103 @@ namespace Taskmaster
         {
             Console.WriteLine("Taskmaster v1.0.0");
             Console.WriteLine("Copyright (c) 2025 Taskmaster Team");
+        }
+
+        private void ShowLogs(string[] args)
+        {
+            int lines = 20; // Default number of lines
+            string filter = "";
+            
+            if (args.Length > 0 && int.TryParse(args[0], out int requestedLines))
+            {
+                lines = requestedLines;
+                if (args.Length > 1)
+                    filter = args[1].ToLower();
+            }
+            else if (args.Length > 0)
+            {
+                filter = args[0].ToLower();
+            }
+            
+            try
+            {
+                string logPath = Daemon.GetLogFilePath();
+                if (!File.Exists(logPath))
+                {
+                    Console.WriteLine($"Log file not found: {logPath}");
+                    return;
+                }
+                
+                // Use FileStream with FileShare.ReadWrite to allow reading the file while it's being written to
+                using (var fileStream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var reader = new StreamReader(fileStream))
+                {
+                    // Read all lines into a list
+                    var allLines = new List<string>();
+                    string? line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        allLines.Add(line);
+                    }
+                    
+                    // Process the lines (most recent first, with filtering)
+                    var filteredLines = allLines
+                        .AsEnumerable()
+                        .Reverse()
+                        .Where(l => string.IsNullOrEmpty(filter) || l.ToLower().Contains(filter))
+                        .Take(lines);
+                    
+                    // Display the lines in chronological order
+                    foreach (var logLine in filteredLines.Reverse())
+                    {
+                        Console.WriteLine(logLine);
+                    }
+                    
+                    // Count the total matching lines for the summary message
+                    int matchingCount = allLines.Count(l => string.IsNullOrEmpty(filter) || l.ToLower().Contains(filter));
+                    int shown = Math.Min(matchingCount, lines);
+                    
+                    Console.WriteLine($"\nShowing {shown} of {matchingCount} log entries" + 
+                                    (string.IsNullOrEmpty(filter) ? "" : $" matching '{filter}'"));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading logs: {ex.Message}");
+            }
+        }
+
+        private void SetLogLevel(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Current log level: " + Logger.GetCurrentLogLevel());
+                Console.WriteLine("Usage: loglevel [error|warning|info|debug]");
+                return;
+            }
+            
+            string level = args[0].ToLower();
+            switch (level)
+            {
+                case "error":
+                    Logger.SetLogLevel(LogLevel.Error);
+                    break;
+                case "warning":
+                    Logger.SetLogLevel(LogLevel.Warning);
+                    break;
+                case "info":
+                    Logger.SetLogLevel(LogLevel.Info);
+                    break;
+                case "debug":
+                    Logger.SetLogLevel(LogLevel.Debug);
+                    break;
+                default:
+                    Console.WriteLine($"Unknown log level: {level}");
+                    Console.WriteLine("Valid levels: error, warning, info, debug");
+                    return;
+            }
+            
+            Console.WriteLine($"Log level set to {level}");
         }
     }
 }
