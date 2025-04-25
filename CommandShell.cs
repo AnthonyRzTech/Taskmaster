@@ -703,8 +703,19 @@ namespace Taskmaster
         private void Shutdown(string[] args)
         {
             Console.WriteLine("Shutting down Taskmaster daemon...");
+            
+            // First dispose the status check timer to prevent further messages
+            StatusCheckTimer?.Dispose();
+            StatusCheckTimer = null;
+            
+            // Mark as not running
             Running = false;
+            
+            // Stop the daemon
             Daemon.Stop();
+            
+            // Exit the application immediately
+            Environment.Exit(0);
         }
         
         private void Exit(string[] args)

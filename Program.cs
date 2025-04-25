@@ -81,15 +81,14 @@ namespace Taskmaster
                         _isShuttingDown = true;
                         Console.WriteLine("Shutting down Taskmaster...");
                         
-                        // Force immediate exit after shutdown completes
+                        // Cancel the event to prevent immediate termination
                         e.Cancel = true;
                         
-                        // Stop the daemon on a separate thread to avoid deadlocks
-                        ThreadPool.QueueUserWorkItem(_ => {
-                            daemon.Stop();
-                            // Force exit if needed
-                            Environment.Exit(0);
-                        });
+                        // Stop the daemon directly
+                        daemon.Stop();
+                        
+                        // Exit immediately without waiting
+                        Environment.Exit(0);
                     }
                     else
                     {
