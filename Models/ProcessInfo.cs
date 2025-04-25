@@ -87,6 +87,13 @@ namespace Taskmaster.Models
         // Helper method to ensure log directory exists
         private string EnsureDirectoryExists(string filePath)
         {
+            // Fix potential duplicate "logs/" prefix in path
+            if (filePath.Contains("logs/logs/") || filePath.Contains("logs\\logs\\"))
+            {
+                filePath = filePath.Replace("logs/logs/", "logs/").Replace("logs\\logs\\", "logs\\");
+                Logger.Log($"Fixed duplicate logs path: {filePath}");
+            }
+            
             string? directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
@@ -395,15 +402,27 @@ namespace Taskmaster.Models
             {
                 try
                 {
-                    StdoutWriter?.Flush();
-                    StdoutWriter?.Dispose();
-                    StdoutWriter = null;
+                    if (StdoutWriter != null)
+                    {
+                        StdoutWriter.Flush();
+                        StdoutWriter.Close();
+                        StdoutWriter.Dispose();
+                        StdoutWriter = null;
+                    }
                     
-                    StderrWriter?.Flush();
-                    StderrWriter?.Dispose();
-                    StderrWriter = null;
+                    if (StderrWriter != null)
+                    {
+                        StderrWriter.Flush();
+                        StderrWriter.Close();
+                        StderrWriter.Dispose();
+                        StderrWriter = null;
+                    }
                 }
-                catch { /* Ignore errors during stream disposal */ }
+                catch (Exception ex) 
+                {
+                    // Log the error but continue with disposal
+                    Console.Error.WriteLine($"Error during stream disposal: {ex.Message}");
+                }
             }
             
             StartCts?.Dispose();

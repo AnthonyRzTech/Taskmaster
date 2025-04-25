@@ -41,50 +41,28 @@ namespace Taskmaster
             
             Logger.Log($"Starting program: {programName}");
             
-            if (!RunningProcesses.TryGetValue(programName, out var processes))
+            // Remove any existing processes dictionary entry to ensure a clean start
+            if (RunningProcesses.TryGetValue(programName, out var existingProcesses))
             {
-                processes = new List<ProcessInfo?>();
-                RunningProcesses[programName] = processes;
+                // Properly dispose any existing processes
+                foreach (var process in existingProcesses)
+                {
+                    process?.Dispose();
+                }
             }
+            
+            // Create a fresh process list
+            var processes = new List<ProcessInfo?>();
+            RunningProcesses[programName] = processes;
             
             bool success = true;
             
             // Start the required number of processes
             for (int i = 0; i < config.NumProcs; i++)
             {
-                // Check if we already have a process at this index
-                ProcessInfo? existingProcess = null;
-                if (i < processes.Count)
-                {
-                    existingProcess = processes[i];
-                }
-                
-                // If process exists and is running, skip it
-                if (existingProcess != null && 
-                    (existingProcess.State == ProcessState.Running || 
-                     existingProcess.State == ProcessState.Starting))
-                {
-                    continue;
-                }
-                
-                // If we have an existing process but it's not running, dispose it
-                if (existingProcess != null)
-                {
-                    existingProcess.Dispose();
-                    processes[i] = null;
-                }
-                
                 // Create and start a new process
                 var procInfo = new ProcessInfo(config, i);
-                
-                if (i < processes.Count)
-                {
-                    processes[i] = procInfo;
-                }
-                else
-                {
-                    processes.Add(procInfo);
-                }
+                processes.Add(procInfo);
                 
                 if (!procInfo.Start())
                 {
@@ -94,6 +72,12 @@ namespace Taskmaster
                 else
                 {
                     Logger.Log($"Started {programName} process #{i} (PID: {procInfo.ProcessId})");
+                }
+                
+                // Small delay between starting multiple processes to avoid race conditions
+                if (i < config.NumProcs - 1)
+                {
+                    Thread.Sleep(100);
                 }
             }
             
@@ -162,8 +146,11 @@ namespace Taskmaster
                 StopProgram(programName, true);
                 RunningProcesses.Remove(programName);
             }
+
+            // Wait a moment to ensure file handles are released
+            Thread.Sleep(500);
             
-            // Check for changed programs
+            // First, handle changed programs
             foreach (var newEntry in newConfig)
             {
                 string programName = newEntry.Key;
@@ -203,16 +190,145 @@ namespace Taskmaster
                         // Note: We don't stop currently running processes
                     }
                 }
-                else
+            }
+
+            // Then separately handle new programs to ensure they are processed after changes
+            var newPrograms = newConfig.Keys
+                .Where(name => !oldConfig.ContainsKey(name))
+                .ToList();
+
+            // Start all new programs
+            foreach (var programName in newPrograms)
+            {
+                Logger.Log($"New program added to configuration: {programName}");
+                
+                // Explicitly remove any old process entries (in case they still exist somehow)
+                if (RunningProcesses.ContainsKey(programName))
                 {
-                    // New program added
-                    Logger.Log($"New program added to configuration: {programName}");
-                    
-                    if (newProgramConfig.AutoStart)
+                    var oldProcesses = RunningProcesses[programName];
+                    foreach (var proc in oldProcesses)
                     {
-                        StartProgram(programName);
+                        proc?.Dispose();
+                    }
+                    RunningProcesses.Remove(programName);
+                }
+
+                try
+                {
+                    // Check if log files exist from previous runs and try to clean them up
+                    var config = newConfig[programName];
+                    CleanupLogFiles(config);
+                    
+                    // Always start new programs when explicitly reloading config
+                    var success = StartProgram(programName);
+                    Logger.Log($"Starting new program {programName}: {(success ? "success" : "failed")}");
+                    
+                    // Wait a bit longer to ensure the process has a chance to start properly
+                    Thread.Sleep(1000);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"Error starting program {programName}: {ex.Message}");
+                }
+            }
+        }
+        
+        // Helper method to clean up log files before restarting a program
+        private void CleanupLogFiles(ProgramConfig config)
+        {
+            try
+            {
+                // Try to force GC to release any file handles
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                
+                // Clean up stdout log files
+                if (!string.IsNullOrEmpty(config.StdoutLogfile))
+                {
+                    for (int i = 0; i < config.NumProcs; i++)
+                    {
+                        string logPath = config.StdoutLogfile;
+                        if (config.NumProcs > 1)
+                        {
+                            string ext = Path.GetExtension(logPath);
+                            logPath = Path.ChangeExtension(logPath, null) + $"-{i}" + ext;
+                        }
+                        
+                        // If the file exists but is locked, try to force unlock it
+                        if (File.Exists(logPath))
+                        {
+                            try
+                            {
+                                // Open and close the file to check if it's accessible
+                                using (var fs = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) 
+                                {
+                                    // File is not locked, we're good
+                                }
+                            }
+                            catch
+                            {
+                                // File is locked, try to force release by renaming it
+                                try
+                                {
+                                    string tempPath = logPath + ".old";
+                                    if (File.Exists(tempPath))
+                                        File.Delete(tempPath);
+                                    
+                                    File.Move(logPath, tempPath);
+                                    Logger.Log($"Renamed locked log file: {logPath} to {tempPath}");
+                                }
+                                catch
+                                {
+                                    // If renaming fails, just note it and continue
+                                    Logger.Log($"Could not access locked log file: {logPath}");
+                                }
+                            }
+                        }
                     }
                 }
+                
+                // Same for stderr log files
+                if (!string.IsNullOrEmpty(config.StderrLogfile))
+                {
+                    for (int i = 0; i < config.NumProcs; i++)
+                    {
+                        string logPath = config.StderrLogfile;
+                        if (config.NumProcs > 1)
+                        {
+                            string ext = Path.GetExtension(logPath);
+                            logPath = Path.ChangeExtension(logPath, null) + $"-{i}" + ext;
+                        }
+                        
+                        // Same cleanup logic as above
+                        if (File.Exists(logPath))
+                        {
+                            try
+                            {
+                                using (var fs = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { }
+                            }
+                            catch
+                            {
+                                try
+                                {
+                                    string tempPath = logPath + ".old";
+                                    if (File.Exists(tempPath))
+                                        File.Delete(tempPath);
+                                    
+                                    File.Move(logPath, tempPath);
+                                    Logger.Log($"Renamed locked log file: {logPath} to {tempPath}");
+                                }
+                                catch
+                                {
+                                    Logger.Log($"Could not access locked log file: {logPath}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Error during log file cleanup: {ex.Message}");
             }
         }
         
